@@ -9,7 +9,7 @@
 ![status](https://img.shields.io/badge/status-not%20live-d9a94b?style=flat-square)
 ![built on](https://img.shields.io/badge/built%20on-IMD-1f8a68?style=flat-square)
 ![chain](https://img.shields.io/badge/chain-Ethereum-141f1a?style=flat-square)
-![tests](https://img.shields.io/badge/tests-222%20passing-1f8a68?style=flat-square)
+![tests](https://img.shields.io/badge/tests-232%20passing-1f8a68?style=flat-square)
 ![contracts](https://img.shields.io/badge/contracts-MIT-blue?style=flat-square)
 
 ![seats held](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fpupate.fun%2Fstatus.json&query=%24.vault.heldCount&label=seats%20held&style=flat-square&color=1f8a68)
@@ -70,7 +70,7 @@ nothing can raise it.
 ```
 .
 ├── src/          Solidity — the token, the tax hook, the vault (Cocoon), the price feed, vesting
-├── test/         Foundry tests (222 passing): unit, fuzz, invariants, mainnet-fork tests
+├── test/         Foundry tests (232 passing): unit, fuzz, invariants, mainnet-fork tests
 ├── script/       deploy scripts (pre-launch and post-launch)
 ├── keeper/        off-chain IMD paid-action client and the keeper loop
 ├── site/          the website — Next.js static export, RainbowKit; simulates the protocol until launch

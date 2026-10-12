@@ -88,7 +88,8 @@ timelock.
 |---|---|---|
 | TimelockController | `0x8bE826082c0FbAeC485048aA26ef42aC147898EC` | 48 hours, the developer proposes |
 | FloorFeed | `0x5A215aa9883cEfE5fa74085ba66288388b83700C` | attester `0x5598Aa91…2982`, evidence chain 1; owned by the deployer until `post` |
-| Cocoon | `0x0adD7b9584cd73CeF21B39014e3ff6077BE53441` | owned by the deployer until `post` |
+| Cocoon | `0xc4E514E60565a2c04bd657f18bB34B503D6c299D` | the corrected vault, deployed by `redeploy`; owned by the deployer until `post` |
+| Cocoon, retired | `0x0adD7b9584cd73CeF21B39014e3ff6077BE53441` | the vault of launch #1400: never wired, empty, abandoned (see below) |
 
 From block 26161806.
 
@@ -104,8 +105,7 @@ answered, all twelve with 2.68 ETH read from OpenSea, against a quorum of eleven
 | Question hash, to be pinned by `post` | `0x0bd457cf1b0d092b4f12904589b3f08b5c67793cc4ef5292d79b2733ba5bab24` |
 | First attested floor | 2.68 ETH, issued 2026-10-12 09:41:57 UTC, signed by `0x5598Aa91…2982` for FloorFeed on chain 1 |
 
-Next: `manifest`, `open` (0.5 IMD), `post`, `report`, `finish`. The runner's progress file carries the
-same addresses and ids.
+The runner's progress file carries the same addresses and ids.
 
 Before the first payment the free checks changed three things, recorded in spec revision 7 and
 `docs/phase0-findings.md`: the hook's liquidity gate is the opening transaction (the hook is not deployed
@@ -120,6 +120,38 @@ Before the second payment an independent review of the gate change came back wit
 (`docs/REVIEW.md`): one regression test and one fork test through IMD's real factory were added, the
 gate's one residual is stated in `launch.json` and in the request, and the request took the two-step
 shape above.
+
+### Launch #1400, parked (2026-10-12)
+
+`open` paid 0.5 IMD (order `ef7a9245-2bc9-4a65-ae99-e91bf9514aef`, payment
+`0x526a5c3e4802548392e578157cb0871fcb4df139fd567bdcb839f84eac4c4f2d`) and IMD's swarm worked on job
+`f3f01060-a9cd-4c35-bad7-e54ac763a342` for 53 minutes. Six of the seven admission checks passed. The
+seventh, findings, did not: the audit found that `Cocoon.skim()` could be called from inside
+`takeAuction`'s lot transfer and book a taker's unrefunded excess into the burn pot. The launch was
+parked as #1400 and nothing was deployed. The audit's text is on
+`https://explorer.imd.fun/jobs/f3f01060-a9cd-4c35-bad7-e54ac763a342`, and `docs/REVIEW.md` records every
+finding with its outcome.
+
+The vault is fixed in the source and deployed again. `script/mainnet/launch.mjs redeploy` deploys the
+new Cocoon beside the same FloorFeed and timelock, at the launch wallet's next contract address
+(`0xc4E514E60565a2c04bd657f18bB34B503D6c299D`, nonce 4), which `launch.json`, the launch request and the fork test already name; the step
+sends nothing if the wallet's nonce has moved. The question hash and the first attestation are FloorFeed's
+and stay as they are. Then: `manifest`, `open` (0.5 IMD), `post`, `report`, `finish`.
+
+What that attempt taught about IMD:
+
+- Half of each payment came back within minutes: 0.25 IMD from `0xd60483eb…9b21` after the oracle
+  request and again after the launch order, so each action has cost 0.25 IMD net so far.
+- The swarm needed 53 minutes from payment to verdict: 11 for the first audit, 7 for the manifest, about
+  12 for the four specialists side by side, then the judge, one revision of the manifest, and the judge
+  again.
+- `launch.json`'s notes may be 4,000 characters at most, and a request whose objective makes a node's
+  rendered assignment longer than 8,000 characters is refused by the free check (`objective_too_large`).
+  An objective of about 4,500 characters fits.
+- IMD's manifest agent is told by its own reference text to write `initialPrice` as 2^96; say in the
+  request that the value in the manifest is to be kept.
+- The wait in `open` must outlast a sleeping laptop: the runner now waits out network errors, and finds
+  Foundry where `foundryup` puts it when the shell's PATH does not have it.
 
 ## What the Sepolia rehearsal taught (2026-10-10)
 

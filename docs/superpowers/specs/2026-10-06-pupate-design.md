@@ -1,7 +1,7 @@
 # Pupate: design spec
 
 Date: 2026-10-06
-Status: revision 7. Revision 2 followed the Phase 0 desk findings in `docs/phase0-findings.md`; revision 3 followed the independent review of Plan 2 in `docs/REVIEW.md`; revision 4 records the decisions made while building Cocoon; revision 5 followed the independent review of Cocoon; revision 6 moved the pool to IMD's 1.25% tier; revision 7 records what the checks before the mainnet launch changed. The change lists at the end say what moved.
+Status: revision 8. Revision 2 followed the Phase 0 desk findings in `docs/phase0-findings.md`; revision 3 followed the independent review of Plan 2 in `docs/REVIEW.md`; revision 4 records the decisions made while building Cocoon; revision 5 followed the independent review of Cocoon; revision 6 moved the pool to IMD's 1.25% tier; revision 7 records what the checks before the mainnet launch changed; revision 8 followed IMD's audit of the first launch attempt (#1400). The change lists at the end say what moved.
 
 ## Summary
 
@@ -111,7 +111,7 @@ The caller receives 0.5% of what was actually spent, from the seat pot.
 
 **Burning.** `burn()` spends burn-pot ETH on PUPATE in the launch pool and burns what it receives. One call may move the pool price by at most 5%, and calls must be at least 5 blocks apart. Because every other trader pays the tax on both legs, moving the price by that much is not worth sandwiching. The caller receives 0.5% of the ETH spent. The limit is applied to the price the trade actually pays, not to the pool's quoted spot price alone: right after the open the spot price sits above all liquidity, and a 1-wei sell can move it to the maximum for free. Cocoon's swap parameters are fixed in code, since its swaps are the only untaxed ones, and Cocoon never calls `flush` from inside its own PoolManager unlock.
 
-**Harvesting.** Seats earn ERC-20 tokens (launch allocations and IMD). `startAuction(token)` opens a falling-price auction for Cocoon's whole balance of that token. The price starts at 1 ETH (a parameter), halves every 2 hours, falls in a straight line inside each half-life, and is zero from 48 hours on. The first taker gets the whole lot, pays the price of that moment, and gets any excess back; the price goes to the seat pot. Tokens that arrive during an auction wait for the next lot. PUPATE is never auctioned; any PUPATE balance is burned by `burnPupate()`.
+**Harvesting.** Seats earn ERC-20 tokens (launch allocations and IMD). `startAuction(token)` opens a falling-price auction for Cocoon's whole balance of that token. The price starts at 100 ETH (a parameter, set at the top of its range because nothing on-chain prices an arbitrary token), halves every 2 hours, falls in a straight line inside each half-life, and is zero from 48 hours on. The first taker gets the whole lot, pays the price of that moment, and gets any excess back; the price goes to the seat pot. Tokens that arrive during an auction wait for the next lot. PUPATE is never auctioned; any PUPATE balance is burned by `burnPupate()`.
 
 **IMD burn.** The IMD burn balance is auctioned the other way round, on the same curve: the IMD a taker must deliver starts at 20,000 IMD per ETH of the lot (a parameter) and falls; the first taker receives the ETH lot, and the IMD they deliver goes to the dead address. Cocoon does not route through IMD's pools. Start values are fixed when an auction starts; a parameter change does not move a running auction.
 
@@ -121,7 +121,7 @@ The caller receives 0.5% of what was actually spent, from the seat pot.
 
 **Wiring.** Cocoon is deployed before the launch, so it learns the launch pool afterwards through a one-time `wire` call by the owner. `wire` accepts only a native-ETH pool whose hook names that pool as its launch pool and Cocoon as its sink, so the irreversible step cannot point at the wrong pool. Until then `burn()` and `burnPupate()` are disabled.
 
-**Accounting.** Cocoon's balance always equals its four pots added together: seat pot, burn pot, developer balance and IMD-burn balance. This is checked by a stateful invariant test across random sequences of every action. ETH forced in without a call (for example by `selfdestruct`) is booked as proceeds by `skim`, callable by anyone.
+**Accounting.** Cocoon's balance always equals its four pots added together: seat pot, burn pot, developer balance and IMD-burn balance. This is checked by a stateful invariant test across random sequences of every action. ETH forced in without a call (for example by `selfdestruct`) is booked as proceeds by `skim`, callable by anyone. `skim`, `depositTax` and every entry point that moves ETH hold one reentrancy lock, so the balance is never measured against the pots while another call has ETH in flight.
 
 **Harvest limits.** `startAuction` refuses the zero address, PUPATE and the collection itself, and runs only once Cocoon is wired.
 
@@ -318,3 +318,13 @@ What the free checks before the mainnet launch changed (2026-10-12). Nothing had
 3. **Developer income includes IMD's launch-wallet share of the pool fee.** IMD's documentation states the 1.25% pool fee as 1% to the wallet that paid for the launch and 0.25% to the network. The spec had recorded this share as undocumented and counted it as zero.
 4. **The paid IMD path was corrected before its first use.** The free check takes an oracle question in a short form and the quote takes the full body; addresses must be lowercase; the challenge request carries no content type; the signer is the wallet's own account, not a wallet client; the x402 client is told it may pay IMD, up to the action's price; the oracle request id is read from the admission's result. The whole flow now runs to the last call before payment in a dry run.
 5. **The launch request launches the exact code.** Its steps are `audit-imported-code → adversarial-review`, the shape IMD admitted for launch #1205: an audit of the code as it is, the manifest, four specialist audits and a judge, where the only node that can write is the manifest node and only to `launch.json`. The earlier request had an adapt step between the two, which gives an agent a write budget over the source to fix what the audit finds. Pupate cannot use that: the hook is bound to a Cocoon that is already deployed.
+
+## Changes in revision 8
+
+What IMD's audit of the first launch attempt changed (2026-10-12). Launch #1400 was parked for one finding in Cocoon; the hook and the token passed. The findings and their outcomes are in `docs/REVIEW.md`.
+
+1. **One lock for everything that touches the books.** `skim` and `depositTax` now hold the reentrancy lock that purchases, burns, auctions and claims already held. `skim` used to be closed only during a Seaport purchase, and a harvest auction's lot token, which can be any contract, could call it while a taker's excess was still in the balance. `takeAuction` also refunds the excess before it calls the lot token.
+2. **A seat's cost must fit the books.** A cost above 2^128 - 1 wei is refused instead of being truncated in one place and not in the other.
+3. **Harvest auctions start at 100 ETH.** The start was 1 ETH. Nothing prices a lot, so a start above anything a lot can be worth lets the falling price find it.
+4. **Cocoon is redeployed before the launch.** The vault deployed on 2026-10-10 held the defect, was never wired and is abandoned. The hook takes the vault as a constructor argument and is deployed by the launch, so the corrected vault takes the old one's place; FloorFeed, the timelock and the oracle question are unchanged.
+5. **Accepted as they are:** a buyback that buys nothing while the pool price is parked above the seeded range (any buy ends it), and FloorFeed's slow recovery after one low report (the owner's `setQuestion` clears it).

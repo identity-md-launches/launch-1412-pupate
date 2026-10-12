@@ -81,7 +81,7 @@ export default function Seats() {
       </p>
       <p>
         Tokens a working seat earns, launch allocations and IMD, arrive in the vault. <code>startAuction(token)</code>{" "}
-        opens a falling-price auction for the vault’s whole balance of that token: the price starts at 1 ETH, halves every
+        opens a falling-price auction for the vault’s whole balance of that token: the price starts at 100 ETH, far above anything a lot can be worth, halves every
         2 hours, falls in a straight line inside each half-life, and is zero from 48 hours on. The first taker gets the
         lot and the ETH goes to the seat pot. PUPATE is never auctioned; any PUPATE the vault holds is burned.
       </p>

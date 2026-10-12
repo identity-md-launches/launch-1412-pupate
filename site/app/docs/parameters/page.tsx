@@ -13,7 +13,7 @@ const TUNABLE = [
   ["Caller reward", "0.5% of ETH spent", "0% to 1%", "callerRewardBps"],
   ["Burn price impact per call", "5%", "1% to 10%", "burnImpactBps"],
   ["Blocks between burns", "5", "1 to 300", "burnSpacing"],
-  ["Harvest auction start price", "1 ETH", "0.01 to 100 ETH", "harvestStartWei"],
+  ["Harvest auction start price", "100 ETH", "0.01 to 100 ETH", "harvestStartWei"],
   ["IMD auction start demand", "20,000 IMD per ETH", "100 to 10,000,000 IMD per ETH", "imdStartPerEth"],
   ["Report freshness", "6 hours", "1 to 24 hours", "FloorFeed.setMaxAge"],
   ["Oracle attester", "IMD's signer", "any address", "FloorFeed.setAttester"],
