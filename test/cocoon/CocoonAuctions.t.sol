@@ -13,41 +13,56 @@ contract CocoonAuctionsTest is CocoonFixture {
         super.setUp();
         earned = new MockERC20("Some Launch", "SOME");
         earned.mint(address(cocoon), 1000 ether);
-        vm.deal(taker, 10 ether);
+        vm.deal(taker, 1000 ether);
     }
 
     // ------------------------------------------------------------------ harvest
 
     function test_harvestAuctionFallsAndTheTakerGetsTheLot() public {
         vm.expectEmit(true, false, false, true, address(cocoon));
-        emit Cocoon.AuctionStarted(address(earned), 1000 ether, 1 ether);
+        emit Cocoon.AuctionStarted(address(earned), 1000 ether, 100 ether);
         cocoon.startAuction(address(earned));
-        assertEq(cocoon.auctionPrice(address(earned)), 1 ether);
+        assertEq(cocoon.auctionPrice(address(earned)), 100 ether);
 
         vm.warp(block.timestamp + 2 hours);
-        assertEq(cocoon.auctionPrice(address(earned)), 0.5 ether);
+        assertEq(cocoon.auctionPrice(address(earned)), 50 ether);
         vm.warp(block.timestamp + 2 hours);
-        assertEq(cocoon.auctionPrice(address(earned)), 0.25 ether);
+        assertEq(cocoon.auctionPrice(address(earned)), 25 ether);
 
         vm.prank(taker);
         vm.expectRevert(Cocoon.Underpaid.selector);
-        cocoon.takeAuction{value: 0.25 ether - 1}(address(earned));
+        cocoon.takeAuction{value: 25 ether - 1}(address(earned));
 
         uint256 potBefore = cocoon.seatPot();
         vm.expectEmit(true, true, false, true, address(cocoon));
-        emit Cocoon.AuctionTaken(address(earned), taker, 1000 ether, 0.25 ether);
+        emit Cocoon.AuctionTaken(address(earned), taker, 1000 ether, 25 ether);
         vm.prank(taker);
-        cocoon.takeAuction{value: 0.3 ether}(address(earned));
+        cocoon.takeAuction{value: 30 ether}(address(earned));
 
         assertEq(earned.balanceOf(taker), 1000 ether);
-        assertEq(taker.balance, 10 ether - 0.25 ether, "the excess came back");
-        assertEq(cocoon.seatPot(), potBefore + 0.25 ether);
+        assertEq(taker.balance, 1000 ether - 25 ether, "the excess came back");
+        assertEq(cocoon.seatPot(), potBefore + 25 ether);
         _assertBalanceIdentity();
 
         vm.expectRevert(Cocoon.NoAuction.selector);
         cocoon.auctionPrice(address(earned));
         vm.expectRevert(Cocoon.NoAuction.selector);
         cocoon.takeAuction(address(earned));
+    }
+
+    /// @dev Nothing prices a lot, so whoever opens an auction could also take it at once. At the
+    /// default start that costs 100 ETH, more than any lot the vault can come to hold is worth.
+    function test_openingAndTakingAtOnceCostsTheWholeStartPrice() public {
+        cocoon.startAuction(address(earned));
+        vm.prank(taker);
+        vm.expectRevert(Cocoon.Underpaid.selector);
+        cocoon.takeAuction{value: 100 ether - 1}(address(earned));
+
+        uint256 potBefore = cocoon.seatPot();
+        vm.prank(taker);
+        cocoon.takeAuction{value: 100 ether}(address(earned));
+        assertEq(cocoon.seatPot(), potBefore + 100 ether);
+        _assertBalanceIdentity();
     }
 
     function test_afterTheCutoffTheLotIsFree() public {
@@ -66,7 +81,7 @@ contract CocoonAuctionsTest is CocoonFixture {
         cocoon.startAuction(address(earned));
 
         vm.prank(taker);
-        cocoon.takeAuction{value: 1 ether}(address(earned));
+        cocoon.takeAuction{value: 100 ether}(address(earned));
         assertEq(earned.balanceOf(taker), 1000 ether);
         assertEq(earned.balanceOf(address(cocoon)), 500 ether);
 
@@ -93,7 +108,7 @@ contract CocoonAuctionsTest is CocoonFixture {
         cocoon.setParams(p);
         assertEq(
             cocoon.auctionPrice(address(earned)),
-            1 ether,
+            100 ether,
             "a parameter change does not move a running auction"
         );
     }
@@ -126,7 +141,7 @@ contract CocoonAuctionsTest is CocoonFixture {
 
         assertEq(imd.balanceOf(cocoon.DEAD()), 1000 ether);
         assertEq(imd.balanceOf(taker), 4000 ether);
-        assertEq(taker.balance, 10.1 ether);
+        assertEq(taker.balance, 1000.1 ether);
         assertEq(cocoon.imdBurnBalance(), 0);
         _assertBalanceIdentity();
 
@@ -152,7 +167,7 @@ contract CocoonAuctionsTest is CocoonFixture {
         imd.approve(address(cocoon), type(uint256).max);
         vm.prank(taker);
         cocoon.takeImdAuction();
-        assertEq(taker.balance, 10.1 ether);
+        assertEq(taker.balance, 1000.1 ether);
         assertEq(cocoon.imdBurnBalance(), 0.1 ether);
         _assertBalanceIdentity();
     }

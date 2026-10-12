@@ -348,4 +348,31 @@ contract CocoonReviewTest is CocoonFixture {
         assertEq(round, 1);
         assertEq(cocoon.heldCount(), 1);
     }
+
+    // ------------------------------------------------------------------ from the audit of launch #1400: a cost the books cannot hold
+
+    /// @dev A seat's cost is kept in 128 bits and the total in 256. A floor that does not fit was cut
+    /// in the one and not in the other, and settling the seat left the difference in the total for good.
+    function test_aFloorTooLargeForTheBooksCannotBeAdopted() public {
+        vm.prank(owner);
+        feed.setQuestion(QUESTION); // forgets the stored floor, so the next report is not rate-limited
+        _setFloor(uint256(type(uint128).max) + 1);
+        collection.mint(address(cocoon), 8);
+
+        vm.expectRevert(Cocoon.OutOfBounds.selector);
+        cocoon.adopt(8);
+        assertEq(cocoon.heldCost(), 0);
+        assertEq(cocoon.heldCount(), 0);
+    }
+
+    function test_theLargestCostTheBooksHoldIsRecordedWhole() public {
+        vm.prank(owner);
+        feed.setQuestion(QUESTION);
+        _setFloor(type(uint128).max);
+        _giveSeat(8);
+
+        (uint128 cost,,,,,,) = cocoon.seats(8);
+        assertEq(cost, type(uint128).max);
+        assertEq(cocoon.heldCost(), type(uint128).max, "the total moves by exactly the seat's cost");
+    }
 }

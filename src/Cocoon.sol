@@ -35,8 +35,10 @@ import {PupateToken} from "./PupateToken.sol";
 /// @dev ETH leaves this contract only to: Seaport (a seat purchase), the PoolManager (a buyback),
 /// a caller reward of at most 1%, the developer, an auction taker's own excess, and the taker of
 /// the IMD auction (the ETH lot). Every function that moves value is callable by anyone and
-/// bounded by parameters the owner can change only within hard-coded limits. The balance always
-/// equals the four pots added together; `skim` books ETH that was forced in.
+/// bounded by parameters the owner can change only within hard-coded limits. Between calls the
+/// balance always equals the four pots added together; `skim` books ETH that was forced in. Every
+/// entry point that moves ETH or measures the balance against the pots holds one lock, so none of
+/// them runs while another has ETH in flight.
 contract Cocoon is IUnlockCallback {
     using StateLibrary for IPoolManager;
 
@@ -203,17 +205,14 @@ contract Cocoon is IUnlockCallback {
         _;
     }
 
+    /// @dev One lock for every entry point that moves ETH or measures the balance against the pots.
+    /// While it is held, ETH may be in flight (the price of a purchase, a taker's excess, a lot on
+    /// its way out), and no other such entry point may run until the books are whole again.
     modifier nonReentrant() {
         if (_tload(LOCK_SLOT) != 0) revert Reentrancy();
         _tstore(LOCK_SLOT, 1);
         _;
         _tstore(LOCK_SLOT, 0);
-    }
-
-    /// @dev For entry points that must not run while a Seaport purchase is in flight.
-    modifier notBuying() {
-        if (_tload(PURCHASE_SLOT) != 0) revert Reentrancy();
-        _;
     }
 
     constructor(
@@ -249,7 +248,9 @@ contract Cocoon is IUnlockCallback {
             callerRewardBps: 50,
             burnImpactBps: 500,
             burnSpacing: 5,
-            harvestStartWei: 1 ether,
+            // Nothing prices a harvest lot, so its auction starts at the highest price the bounds
+            // allow and the curve finds the lot's worth on the way down.
+            harvestStartWei: 100 ether,
             imdStartPerEth: 20_000 ether
         });
         lastBurnBlock = block.number;
@@ -275,7 +276,7 @@ contract Cocoon is IUnlockCallback {
 
     /// @notice Accept tax: 10% to the developer, 5% to the IMD burn, 85% to the strategy, split
     /// between the seat pot and the burn pot by the current mode.
-    function depositTax() external payable notBuying {
+    function depositTax() external payable nonReentrant {
         uint256 amount = msg.value;
         uint256 dev = amount * DEVELOPER_BPS / BPS;
         uint256 toImd = amount * IMD_BURN_BPS / BPS;
@@ -292,7 +293,9 @@ contract Cocoon is IUnlockCallback {
 
     /// @notice Book ETH that arrived without a call (forced in) as sale proceeds, so the balance
     /// identity holds again. Anyone may call.
-    function skim() external notBuying {
+    /// @dev Under the lock: inside another guarded call the balance can run ahead of the pots by ETH
+    /// that is only passing through, and booking it would credit the burn pot with ETH that leaves.
+    function skim() external nonReentrant {
         uint256 surplus = address(this).balance - (seatPot + burnPot + developerBalance + imdBurnBalance);
         if (surplus == 0) revert NothingToSkim();
         burnPot += surplus;
@@ -406,6 +409,9 @@ contract Cocoon is IUnlockCallback {
     }
 
     function _record(uint256 tokenId, uint256 cost) private {
+        // The seat's cost is kept in 128 bits and the total in 256: a cost that does not fit would be
+        // cut in one and not in the other, and the difference would stay in `heldCost` for good.
+        if (cost > type(uint128).max) revert OutOfBounds();
         Params storage p = params;
         Seat storage previous = seats[tokenId];
         uint16 round = previous.boughtAt == 0 ? 0 : previous.round + 1;
@@ -474,7 +480,7 @@ contract Cocoon is IUnlockCallback {
         if (bought == 0) revert NothingBought();
 
         uint256 reward = spent * p.callerRewardBps / BPS;
-        burnPot = budget - spent - reward;
+        burnPot -= spent + reward;
         lastBurnBlock = block.number;
         PupateToken(Currency.unwrap(launchKey.currency1)).burn(bought);
         emit Burned(spent, bought, msg.sender, reward);
@@ -540,9 +546,11 @@ contract Cocoon is IUnlockCallback {
         if (msg.value < price) revert Underpaid();
         delete auctions[token];
         seatPot += price;
-        _safeTransfer(token, msg.sender, a.lot);
         emit AuctionTaken(token, msg.sender, a.lot, price);
+        // The excess goes back before the lot token is called. Any contract can be put up as a lot,
+        // so from here on the balance and the pots agree, whatever that token does with the call.
         if (msg.value > price) _pay(msg.sender, msg.value - price);
+        _safeTransfer(token, msg.sender, a.lot);
     }
 
     // ------------------------------------------------------------------ the IMD auction

@@ -20,11 +20,13 @@ import {OracleAttestation} from "../../src/oracle/OracleAttestation.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockERC721} from "../mocks/MockERC721.sol";
 import {MockSeaport} from "../mocks/MockSeaport.sol";
+import {ReenteringToken} from "../mocks/ReenteringToken.sol";
 import {PoolRouter} from "./PoolRouter.sol";
 
 /// @dev Invariant handler. Plays every role around Cocoon: trader, keeper, seller, buyer of our
-/// listings, auction taker and oracle. Nothing here reverts; failed actions are swallowed, and the
-/// invariants read the resulting state.
+/// listings, auction taker, oracle, and the author of a lot token that calls back into Cocoon while
+/// it is being paid out. Nothing here reverts; failed actions are swallowed, and the invariants read
+/// the resulting state.
 contract CocoonHandler is StdUtils {
     struct Setup {
         Cocoon cocoon;
@@ -45,6 +47,9 @@ contract CocoonHandler is StdUtils {
 
     Setup private s;
     CriteriaResolver[] private noResolvers;
+    /// @dev Anyone can put any contract up as a harvest lot; this one calls back from its transfer.
+    ReenteringToken public hostile;
+    uint256 public hostileCalls;
 
     uint256[] public recorded;
     mapping(uint256 => bool) private isRecorded;
@@ -59,6 +64,7 @@ contract CocoonHandler is StdUtils {
     constructor(Setup memory setup) {
         s = setup;
         setup.collection.setApprovalForAll(address(setup.seaport), true);
+        hostile = new ReenteringToken();
     }
 
     receive() external payable {}
@@ -197,6 +203,49 @@ contract CocoonHandler is StdUtils {
         uint256 pay = bound(payment, price, price + 0.1 ether);
         if (address(this).balance < pay) return;
         try s.cocoon.takeAuction{value: pay}(address(s.earned)) {} catch {}
+    }
+
+    /// @dev A lot nobody vetted. From inside the transfer that pays the lot out, the token makes one
+    /// call back into Cocoon, chosen by `pick`, while the taker has sent `excess` on top of the price.
+    /// Whatever the token tries, the action as a whole must not take ETH out of Cocoon, and the pots
+    /// must still add up to the balance afterwards.
+    function hostileHarvest(uint8 pick, uint96 excess) external noEthExit {
+        bytes memory data;
+        uint256 value;
+        uint256 which = pick % 7;
+        if (which == 0) {
+            data = abi.encodeCall(Cocoon.skim, ());
+        } else if (which == 1) {
+            data = abi.encodeCall(Cocoon.depositTax, ());
+            value = 0.1 ether;
+        } else if (which == 2) {
+            value = 0.1 ether; // a plain payment, which Cocoon books as proceeds
+        } else if (which == 3) {
+            data = abi.encodeCall(Cocoon.burn, ());
+        } else if (which == 4) {
+            data = abi.encodeCall(Cocoon.claimDeveloper, ());
+        } else if (which == 5) {
+            data = abi.encodeCall(Cocoon.takeImdAuction, ());
+        } else {
+            data = abi.encodeCall(Cocoon.startImdAuction, ());
+        }
+        if (value != 0) {
+            (bool funded,) = address(hostile).call{value: value}("");
+            if (!funded) return;
+        }
+        hostile.arm(address(s.cocoon), data, value);
+        try s.cocoon.startAuction(address(hostile)) {} catch {}
+        uint256 price;
+        try s.cocoon.auctionPrice(address(hostile)) returns (uint256 p) {
+            price = p;
+        } catch {
+            return;
+        }
+        uint256 pay = price + bound(excess, 0, 50 ether);
+        if (address(this).balance < pay) return;
+        try s.cocoon.takeAuction{value: pay}(address(hostile)) {
+            if (hostile.called()) hostileCalls += 1;
+        } catch {}
     }
 
     function imdCycle() external {

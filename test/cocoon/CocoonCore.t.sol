@@ -45,7 +45,7 @@ contract CocoonCoreTest is CocoonFixture {
         assertEq(p.callerRewardBps, 50);
         assertEq(p.burnImpactBps, 500);
         assertEq(p.burnSpacing, 5);
-        assertEq(p.harvestStartWei, 1 ether);
+        assertEq(p.harvestStartWei, 100 ether);
         assertEq(p.imdStartPerEth, 20_000 ether);
         assertEq(cocoon.owner(), owner);
         assertEq(cocoon.developer(), developer);

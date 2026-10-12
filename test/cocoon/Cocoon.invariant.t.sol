@@ -50,6 +50,8 @@ contract CocoonInvariantTest is CocoonFixture {
         handler.burn();
         handler.harvest(10 ether, 1 ether);
         handler.imdCycle();
+        handler.hostileHarvest(0, 5 ether);
+        assertEq(handler.hostileCalls(), 1, "the lot token called back into Cocoon");
         assertGt(cocoon.burnPot() + cocoon.seatPot(), 0);
         // The sold seat left Cocoon and its listing shows filled; no stray ETH exit was booked.
         assertTrue(handler.listingWasFilled(1000), "the seat left through a filled listing");
