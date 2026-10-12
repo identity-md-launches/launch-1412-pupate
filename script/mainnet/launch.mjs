@@ -6,6 +6,8 @@
 //
 //   node script/mainnet/launch.mjs status     balances, gas, what is done
 //   node script/mainnet/launch.mjs pre        DeployPreLaunch: timelock, FloorFeed, Cocoon        (gas only)
+//   node script/mainnet/launch.mjs redeploy   a corrected Cocoon beside the same FloorFeed and timelock,
+//                                             at the address launch.json names; only before the launch (gas only)
 //   node script/mainnet/launch.mjs question   Permit2 allowance if needed, the floor question to the
 //                                             oracle, its attestation, the question hash          (0.5 IMD)
 //   node script/mainnet/launch.mjs manifest   fill launch.json, commit and push, free import and
@@ -63,7 +65,7 @@ const MAX_BASE_FEE_GWEI = Number(env('MAX_BASE_FEE_GWEI') || 1);
 if (!RPC) fail('MAINNET_RPC_URL is not set');
 if (!/^0x[0-9a-fA-F]{64}$/.test(KEY)) fail('KEEPER_PRIVATE_KEY is not set or not a 0x-prefixed 32-byte key');
 
-const steps = { status, pre, question, manifest, open, post, report, finish };
+const steps = { status, pre, redeploy, question, manifest, open, post, report, finish };
 const cmd = process.argv[2] || 'status';
 if (!steps[cmd]) fail(`unknown step ${cmd}; one of: ${Object.keys(steps).join(', ')}`);
 // Deferred by one tick: a step that reaches a helper declared further down before its first await
@@ -119,6 +121,69 @@ async function pre() {
   saveProgress(p);
   await settled('the pre-launch contracts', async () => (await hasCode(p.cocoon)) && (await hasCode(p.feed)) && (await hasCode(p.timelock)));
   console.log(`Cocoon ${p.cocoon}\nFloorFeed ${p.feed}\nTimelock ${p.timelock}\nfrom block ${p.fromBlock}`);
+}
+
+// ------------------------------------------------------------------ redeploy
+
+/**
+ * A corrected Cocoon beside the FloorFeed and the timelock that exist. The hook is deployed by the
+ * launch and takes the vault's address in its constructor, so until the launch a new vault simply takes
+ * the old one's place. launch.json names the address beforehand, as the deployer's next contract
+ * address, so that the manifest, the request and the tests describe one tree; if the deployer's nonce
+ * has moved since they were written, nothing is sent.
+ */
+async function redeploy() {
+  const p = loadProgress();
+  const deployer = await ready(p);
+  if (!p.cocoon) throw new Error('run `pre` first');
+  if (p.token) throw new Error(`the launch is done (token ${p.token}); its hook is bound to Cocoon ${p.cocoon} for good`);
+  const expected = String(JSON.parse(readFileSync(LAUNCH_JSON, 'utf8')).hook.constructorArgs[1]);
+  if (!/^0x[0-9a-f]{40}$/.test(expected)) throw new Error(`launch.json names no Cocoon address: ${expected}`);
+  if (p.cocoon.toLowerCase() === expected) {
+    console.log(`already done: Cocoon ${p.cocoon}`);
+    return;
+  }
+  step('a corrected Cocoon beside the same FloorFeed and timelock');
+  let cocoon;
+  if (await hasCode(expected)) {
+    console.log(`  ${expected} already has code: an earlier run deployed it; checking it`);
+    cocoon = expected;
+  } else {
+    const nonce = Number(await rpc('eth_getTransactionCount', [deployer, 'latest']));
+    const next = (castLocal('compute-address', deployer, '--nonce', String(nonce)).match(/0x[0-9a-fA-F]{40}/) || [''])[0];
+    if (next.toLowerCase() !== expected) {
+      throw new Error(`the deployer's next contract (nonce ${nonce}) would land on ${next || '?'}, but launch.json, the launch request and the fork test name ${expected}. Nothing was sent. The wallet has made another transaction since they were written; they have to name the new address first.`);
+    }
+    const out = forgeScript('script/RedeployCocoon.s.sol:RedeployCocoon', {
+      DEVELOPER: deployer,
+      OPERATOR: deployer,
+      COLLECTION: MAINNET.collection,
+      POOL_MANAGER: MAINNET.poolManager,
+      IMD: MAINNET.imd,
+      SEAPORT: MAINNET.seaport,
+      FEED: p.feed,
+      EXPECTED: expected,
+    });
+    cocoon = grab(out, 'Cocoon');
+    if (cocoon.toLowerCase() !== expected) throw new Error(`the new Cocoon is at ${cocoon}, not at ${expected}`);
+  }
+  await settled('the new Cocoon', async () => await hasCode(cocoon));
+  const facts = [
+    ['owner() is the deployer', call(cocoon, 'owner()(address)')[0], deployer],
+    ['developer() is the deployer', call(cocoon, 'developer()(address)')[0], deployer],
+    ['FLOOR() is the FloorFeed', call(cocoon, 'FLOOR()(address)')[0], p.feed],
+    ['COLLECTION() is identity.md', call(cocoon, 'COLLECTION()(address)')[0], MAINNET.collection],
+    ['IMD() is the IMD token', call(cocoon, 'IMD()(address)')[0], MAINNET.imd],
+    ['wired() is false', call(cocoon, 'wired()(bool)')[0], 'false'],
+  ];
+  for (const [name, got, want] of facts) {
+    if (String(got).toLowerCase() !== String(want).toLowerCase()) throw new Error(`the contract at ${cocoon} is not the vault expected: ${name}, got ${got}`);
+    console.log(`  ok   ${name}`);
+  }
+  p.retiredCocoons = [...(p.retiredCocoons || []), p.cocoon];
+  p.cocoon = cocoon;
+  saveProgress(p);
+  console.log(`Cocoon ${cocoon}\nretired, never wired and empty: ${p.retiredCocoons.join(', ')}`);
 }
 
 // ------------------------------------------------------------------ question (0.5 IMD)
@@ -226,6 +291,17 @@ function printMembers(record) {
 async function manifest() {
   const p = loadProgress();
   if (!p.cocoon) throw new Error('run `pre` first');
+  if (p.launch?.parked) {
+    // A parked launch is over: its order was paid and cannot be opened again. A new request puts it
+    // aside so that `open` pays for a new order, but never for the commit that was just refused.
+    if (p.baseCommit && p.baseCommit === git(['rev-parse', 'HEAD']).trim()) {
+      throw new Error(`launch #${p.launch.launchNumber} was parked at this very commit (${p.baseCommit.slice(0, 10)}): ${p.launch.parked}\nA new request for the same code would be parked again. Answer the finding and commit first.`);
+    }
+    p.parkedLaunches = [...(p.parkedLaunches || []), { ...p.launch, baseCommit: p.baseCommit ?? null }];
+    delete p.launch;
+    saveProgress(p);
+    console.log(`the parked launch #${p.parkedLaunches.at(-1).launchNumber} is put aside; \`open\` will pay for a new order`);
+  }
   step('launch.json with the Cocoon and timelock addresses');
   let text = readFileSync(LAUNCH_JSON, 'utf8');
   // Lowercase, as IMD takes addresses everywhere else.
@@ -304,12 +380,12 @@ async function open() {
   let last = '';
   let launch = null;
   for (;;) {
-    const job = await imd.job(result.jobId);
+    const job = await patiently(() => imd.job(result.jobId), until);
     const nodes = (job.nodes || []).map((n) => `${n.key ?? n.skill ?? '?'}:${n.status ?? n.state ?? '?'}`).join(' ');
     let line = `job ${job.state}${job.blockedReason ? ` (${job.blockedReason})` : ''} · launch ${job.launch?.status ?? 'not attached'}`;
     if (job.launch?.id) {
       p.launch.launchId = job.launch.id;
-      launch = await imd.launch(job.launch.id);
+      launch = await patiently(() => imd.launch(job.launch.id), until);
       p.launch.launchNumber = launch.launchNumber;
       saveProgress(p);
       line += ` #${launch.launchNumber}${launch.parkedReason ? ` · ${launch.parkedReason}` : ''}${launch.deployFailure ? ` · deploy: ${JSON.stringify(launch.deployFailure).slice(0, 200)}` : ''}`;
@@ -576,6 +652,24 @@ async function paidOrder(p, slot, action, input, checkInput = input) {
 
 // ------------------------------------------------------------------ shared
 
+/**
+ * A read that outlasts a sleeping laptop or a dropped connection: a network error or one of IMD's own
+ * 5xx answers is waited out until `deadline`. It is only ever given reads; nothing here signs or pays.
+ */
+async function patiently(read, deadline) {
+  for (;;) {
+    try {
+      return await read();
+    } catch (e) {
+      const text = `${e?.cause?.code ?? ''} ${e?.message ?? ''}`;
+      const transient = e instanceof TypeError || (e instanceof ImdError && e.status >= 500) || /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up/i.test(text);
+      if (!transient || Date.now() > deadline) throw e;
+      console.log(`  ${new Date().toISOString()} no answer (${scrub(text).trim().slice(0, 90)}); trying again`);
+      await sleep(15_000);
+    }
+  }
+}
+
 /** The deployer address, after the chain id, the balance, the base fee and the progress file pass. */
 async function ready(p) {
   const chainId = Number(await rpc('eth_chainId'));
@@ -601,13 +695,24 @@ async function ready(p) {
  */
 async function verifyProgress(p, deployer) {
   if (!p.cocoon) return;
-  const file = join(ROOT, 'broadcast', 'DeployPreLaunch.s.sol', String(CHAIN_ID), 'run-latest.json');
-  if (existsSync(file)) {
-    const json = JSON.parse(readFileSync(file, 'utf8'));
-    const deployed = Object.fromEntries(json.transactions.filter((t) => t.contractAddress).map((t) => [t.contractName, t.contractAddress.toLowerCase()]));
-    for (const [name, want] of [['Cocoon', p.cocoon], ['FloorFeed', p.feed], ['TimelockController', p.timelock]]) {
-      if (deployed[name] && deployed[name] !== want.toLowerCase()) throw new Error(`progress names ${name} ${want}, but the broadcast record has ${deployed[name]}`);
-    }
+  // The pre-launch broadcast names the first vault; a redeploy broadcast names its replacement.
+  const fromScript = (script) => {
+    const file = join(ROOT, 'broadcast', script, String(CHAIN_ID), 'run-latest.json');
+    if (!existsSync(file)) return {};
+    return Object.fromEntries(JSON.parse(readFileSync(file, 'utf8')).transactions.filter((t) => t.contractAddress).map((t) => [t.contractName, t.contractAddress.toLowerCase()]));
+  };
+  const first = fromScript('DeployPreLaunch.s.sol');
+  const replaced = fromScript('RedeployCocoon.s.sol');
+  for (const [name, want] of [['FloorFeed', p.feed], ['TimelockController', p.timelock]]) {
+    if (first[name] && first[name] !== want.toLowerCase()) throw new Error(`progress names ${name} ${want}, but the broadcast record has ${first[name]}`);
+  }
+  const cocoon = p.cocoon.toLowerCase();
+  if (replaced.Cocoon && replaced.Cocoon !== cocoon) {
+    // A redeploy that was broadcast and not yet recorded: only `redeploy` may act, and it checks the
+    // contract before it records it. Anything else would still be looking at the old vault.
+    if (cmd !== 'redeploy' && cmd !== 'status') throw new Error(`the broadcast record has a redeployed Cocoon ${replaced.Cocoon}, but the progress file still names ${p.cocoon}; run \`redeploy\` so it is checked and recorded`);
+  } else if (!replaced.Cocoon && first.Cocoon && first.Cocoon !== cocoon) {
+    throw new Error(`progress names Cocoon ${p.cocoon}, but the broadcast record has ${first.Cocoon}`);
   }
   const attester = call(p.feed, 'attester()(address)')[0];
   if (attester.toLowerCase() !== MAINNET.attester.toLowerCase()) throw new Error(`FloorFeed ${p.feed} has attester ${attester}, not IMD's`);

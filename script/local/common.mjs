@@ -2,7 +2,7 @@
 // must carry, JSON-RPC and `cast` helpers. Nothing here prints MAINNET_RPC_URL.
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -152,14 +152,30 @@ export async function hasCode(address) {
 
 // ------------------------------------------------------------------ processes
 
+const FOUNDRY_TOOLS = new Set(['forge', 'cast', 'anvil', 'chisel']);
+
+/** Where foundryup installs a tool, if it is there. */
+function foundryBinary(cmd) {
+  const dir = process.env.FOUNDRY_DIR || join(homedir(), '.foundry');
+  const file = join(dir, 'bin', process.platform === 'win32' ? `${cmd}.exe` : cmd);
+  return existsSync(file) ? file : null;
+}
+
 export function run(cmd, args, { env, cwd = ROOT, quiet = false } = {}) {
-  const r = spawnSync(cmd, args, {
+  const options = {
     cwd,
     env: { ...process.env, NO_COLOR: '1', ...env },
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
-  });
+  };
+  let r = spawnSync(cmd, args, options);
+  // foundryup adds its folder to the PATH of the shell it ran in. Another shell (PowerShell, cmd)
+  // does not have it, so a Foundry tool that is not found by name is looked for where foundryup puts it.
+  if (r.error?.code === 'ENOENT' && FOUNDRY_TOOLS.has(cmd)) {
+    const file = foundryBinary(cmd);
+    if (file) r = spawnSync(file, args, options);
+  }
   if (r.error) throw new Error(`${cmd} could not be started: ${r.error.message}`);
   if (r.status !== 0 && !quiet) {
     throw new Error(`${cmd} ${args.slice(0, 2).join(' ')} failed (exit ${r.status})\n${r.stdout}\n${r.stderr}`);

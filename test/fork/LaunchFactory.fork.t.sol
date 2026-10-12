@@ -76,7 +76,7 @@ contract LaunchFactoryForkTest is Test {
     ILaunchFactory constant FACTORY = ILaunchFactory(0x12C63b581d07093F6126bc02263c58f7EadaA96F);
     IPoolManager constant POOL_MANAGER = IPoolManager(0x000000000004444c5dc75cB358380D2e3dE08A90);
     /// @dev The hook's constructor arguments on mainnet (docs/deployment.md).
-    address constant COCOON = 0x0adD7b9584cd73CeF21B39014e3ff6077BE53441;
+    address constant COCOON = 0xc4E514E60565a2c04bd657f18bB34B503D6c299D;
     address constant TIMELOCK = 0x8bE826082c0FbAeC485048aA26ef42aC147898EC;
     uint160 constant HOOK_FLAGS = 0x18CC;
     /// @dev The opening the launch policy sets for an ETH pair: 1 ETH = 100,000,000 tokens, fee 12500,
